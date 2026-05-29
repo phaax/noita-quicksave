@@ -2,6 +2,7 @@
 
 #include "Logger.h"
 #include "SaveManager.h"
+#include "Utility.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -17,28 +18,6 @@ namespace noitaqs
         SaveFn g_saveWorldStateFn = nullptr;
         SaveFn g_savePlayerFn = nullptr;
         SaveFn g_comprehensiveSaveFn = nullptr;
-
-        struct EnumWindowsParam { DWORD pid; HWND result; };
-
-        BOOL CALLBACK FindMainWindowCb(HWND hwnd, LPARAM lParam)
-        {
-            auto* p = reinterpret_cast<EnumWindowsParam*>(lParam);
-            DWORD pid = 0;
-            GetWindowThreadProcessId(hwnd, &pid);
-            if (pid == p->pid && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == nullptr)
-            {
-                p->result = hwnd;
-                return FALSE;
-            }
-            return TRUE;
-        }
-
-        HWND GetNoitaHwnd()
-        {
-            EnumWindowsParam p{ GetCurrentProcessId(), nullptr };
-            EnumWindows(FindMainWindowCb, reinterpret_cast<LPARAM>(&p));
-            return p.result;
-        }
 
         const uint8_t* FindBytes(const uint8_t* start, size_t size, const uint8_t* needle, size_t needleLen)
         {
@@ -440,7 +419,7 @@ namespace noitaqs
         // synchronously inside the WM_CLOSE handler. We post WM_CLOSE (async) so we
         // don't block mid-Lua-hook, and let DLL_PROCESS_DETACH copy the files once the
         // process has fully exited and the save is guaranteed to be on disk.
-        HWND hwnd = GetNoitaHwnd();
+        HWND hwnd = FindOwnMainWindow();
         if (hwnd == nullptr)
         {
             Log(L"[SaveFinder] Could not find Noita window; cannot trigger save.");

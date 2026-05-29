@@ -33,6 +33,15 @@ namespace noitaqs
         // touched from the poll thread.
         bool g_autoContinuePending = false;
 
+        // Auto-continue progresses Waiting (no menu yet) -> Pressing (menu up,
+        // re-writing the Continue trigger every frame until the menu dismisses)
+        // -> Done. A frame budget bounds Pressing so a changed flag semantic
+        // can't loop forever. All three only touched from the poll thread.
+        enum class AutoContinueState { Waiting, Pressing, Done };
+        AutoContinueState g_acState = AutoContinueState::Waiting;
+        int g_acFrames = 0;
+        constexpr int kMaxPressFrames = 200; // ~3 s at the 15 ms poll interval
+
         // Noita's PE preferred base and the addresses (recorded against that base)
         // of the in-main-menu flag and the Continue-pressed trigger. Rebased via
         // the runtime module slide so the feature still works under ASLR.
@@ -131,6 +140,28 @@ namespace noitaqs
         bool BuildAutoContinueCommandLine(wchar_t* dst, size_t cap, const wchar_t* exePath)
         {
             return swprintf_s(dst, cap, L"\"%s\" %s", exePath, kAutoContinueArg) > 0;
+        }
+
+        // Bring this process's main window to the foreground so Noita (SDL)
+        // captures keyboard/mouse input. After a restart the new window is
+        // spawned by the dying old process and doesn't reliably receive
+        // foreground activation, which sometimes leaves controls dead until the
+        // user clicks in-world. The old process calls AllowSetForegroundWindow
+        // on us at spawn time so SetForegroundWindow here is honored rather
+        // than silently denied by the foreground lock.
+        void ActivateOwnWindow()
+        {
+            HWND hwnd = FindOwnMainWindow();
+            if (hwnd == nullptr)
+            {
+                Log(L"[SaveManager] Auto-continue: main window not found for activation.");
+                return;
+            }
+
+            ShowWindow(hwnd, SW_SHOW);
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+            SetActiveWindow(hwnd);
         }
 
         void TouchAllFiles(const fs::path& root)
@@ -317,6 +348,11 @@ namespace noitaqs
                             CREATE_SUSPENDED, nullptr, workDir, &si, &pi))
             return false;
 
+        // Grant the child the right to call SetForegroundWindow on itself once it
+        // starts. We are still the foreground process here (the user just pressed
+        // F5/F9 in this window), so this permission transfer is allowed.
+        AllowSetForegroundWindow(pi.dwProcessId);
+
         g_pendingProcess = pi.hProcess;
         g_pendingThread = pi.hThread;
         return true;
@@ -363,7 +399,8 @@ namespace noitaqs
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
-        CreateProcessW(exePath, cmdLine, nullptr, nullptr, FALSE, 0, nullptr, workDir, &si, &pi);
+        if (CreateProcessW(exePath, cmdLine, nullptr, nullptr, FALSE, 0, nullptr, workDir, &si, &pi))
+            AllowSetForegroundWindow(pi.dwProcessId); // best-effort; harmless if denied
         if (pi.hProcess) CloseHandle(pi.hProcess);
         if (pi.hThread)  CloseHandle(pi.hThread);
     }
@@ -398,6 +435,10 @@ namespace noitaqs
         if (!created)
             throw std::runtime_error("Could not restart Noita.");
 
+        // Let the new instance pull itself to the foreground when it loads (we are
+        // still the foreground process until TerminateProcess below).
+        AllowSetForegroundWindow(process.dwProcessId);
+
         CloseHandle(process.hProcess);
         CloseHandle(process.hThread);
 
@@ -427,14 +468,54 @@ namespace noitaqs
             return;
         }
 
-        if (flagValue == 0)
-            return;
+        switch (g_acState)
+        {
+        case AutoContinueState::Waiting:
+            // Idle until the main menu starts rendering.
+            if (flagValue != 0)
+            {
+                Log(L"[SaveManager] Auto-continue: main menu detected; activating window and pressing Continue.");
+                ActivateOwnWindow();
+                g_acState = AutoContinueState::Pressing;
+                g_acFrames = 0;
+            }
+            break;
 
-        if (SafeWriteByte(continueTrigger, 1))
-            Log(L"[SaveManager] Auto-continue: pressing Continue.");
-        else
-            Log(L"[SaveManager] Auto-continue: trigger address not writable; disabling.");
+        case AutoContinueState::Pressing:
+            if (flagValue == 0)
+            {
+                // Menu dismissed -> Continue was accepted and the game is loading.
+                // Re-activate now: this is the moment Noita needs the window focused
+                // to capture input (otherwise controls stay dead until a manual click).
+                Log(L"[SaveManager] Auto-continue: Continue accepted; re-activating window for input capture.");
+                ActivateOwnWindow();
+                g_acState = AutoContinueState::Done;
+                g_autoContinuePending = false;
+                break;
+            }
 
-        g_autoContinuePending = false;
+            // Re-write the trigger every frame the menu is up. A single write can
+            // race the menu becoming ready to consume it; retrying makes the press
+            // reliable instead of working only some of the time.
+            if (!SafeWriteByte(continueTrigger, 1))
+            {
+                Log(L"[SaveManager] Auto-continue: trigger address not writable; disabling.");
+                g_acState = AutoContinueState::Done;
+                g_autoContinuePending = false;
+                break;
+            }
+
+            if (++g_acFrames > kMaxPressFrames)
+            {
+                Log(L"[SaveManager] Auto-continue: timed out waiting for menu to dismiss; disabling.");
+                g_acState = AutoContinueState::Done;
+                g_autoContinuePending = false;
+            }
+            break;
+
+        case AutoContinueState::Done:
+            g_autoContinuePending = false;
+            break;
+        }
     }
 }

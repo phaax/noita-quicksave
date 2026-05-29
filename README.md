@@ -10,8 +10,10 @@ the original Lua DLL renamed as `lua51_orig.dll`.
 
 - `F5` triggers Noita's own save sequence and copies the result to the backup,
   capturing your current inventory, health, wands, and perks. Noita restarts
-  automatically.
-- `F9` restores the quicksave and restarts Noita.
+  automatically and lands you back in your run — Continue is clicked for you.
+- `F9` restores the quicksave and restarts Noita, also auto-clicking Continue.
+- Hotkeys only fire when Noita is the focused window, so pressing F5/F9 in
+  another application won't accidentally save or load.
 - In-game messages are sent through Noita's own `GamePrint` and
   `GamePrintImportant` Lua functions without requiring a companion mod.
 - Backups are stored in a visible `NoitaQuicksave` directory beside `noita.exe`.

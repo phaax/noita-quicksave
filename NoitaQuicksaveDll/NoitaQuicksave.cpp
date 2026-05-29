@@ -47,13 +47,21 @@ namespace
                 SHORT f5 = GetAsyncKeyState(VK_F5_KEY);
                 SHORT f9 = GetAsyncKeyState(VK_F9_KEY);
 
-                if ((f5 & 0x8000) != 0 && (previousF5 & 0x8000) == 0)
+                // GetAsyncKeyState reads global keyboard state, so F5/F9 would
+                // otherwise fire while the user is in another application. Gate
+                // the actions on Noita owning the foreground window. previousF5/F9
+                // still update every cycle below regardless of focus: a key held
+                // while unfocused looks like a held edge once focus returns, so
+                // the next genuine press (release + re-press) is what fires.
+                bool focused = noitaqs::IsOwnWindowForeground();
+
+                if (focused && (f5 & 0x8000) != 0 && (previousF5 & 0x8000) == 0)
                 {
                     noitaqs::RequestSaveTrigger();
                     noitaqs::LogAndQueue(L"Quicksave requested...");
                 }
 
-                if ((f9 & 0x8000) != 0 && (previousF9 & 0x8000) == 0)
+                if (focused && (f9 & 0x8000) != 0 && (previousF9 & 0x8000) == 0)
                 {
                     if (noitaqs::IsQuicksavePending())
                     {

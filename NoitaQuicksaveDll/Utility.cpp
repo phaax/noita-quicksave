@@ -49,4 +49,40 @@ namespace noitaqs
 
         return fs::path(buffer).parent_path();
     }
+
+    namespace
+    {
+        struct FindWindowParam { DWORD pid; HWND result; };
+
+        BOOL CALLBACK FindMainWindowCb(HWND hwnd, LPARAM lParam)
+        {
+            auto* p = reinterpret_cast<FindWindowParam*>(lParam);
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hwnd, &pid);
+            if (pid == p->pid && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == nullptr)
+            {
+                p->result = hwnd;
+                return FALSE;
+            }
+            return TRUE;
+        }
+    }
+
+    HWND FindOwnMainWindow()
+    {
+        FindWindowParam p{ GetCurrentProcessId(), nullptr };
+        EnumWindows(FindMainWindowCb, reinterpret_cast<LPARAM>(&p));
+        return p.result;
+    }
+
+    bool IsOwnWindowForeground()
+    {
+        HWND foreground = GetForegroundWindow();
+        if (foreground == nullptr)
+            return false;
+
+        DWORD pid = 0;
+        GetWindowThreadProcessId(foreground, &pid);
+        return pid == GetCurrentProcessId();
+    }
 }
